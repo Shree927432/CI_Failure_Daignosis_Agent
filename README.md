@@ -1,65 +1,101 @@
 # Bayesian Information-Gain Agent for CI Failure Diagnosis
 
-A probabilistic, sequential diagnostic agent for identifying the root cause of CI/CD pipeline failures.
+A probabilistic, sequential diagnostic AI agent for identifying the root cause of Continuous Integration (CI) pipeline failures.
 
-Instead of making a single root-cause prediction, the agent treats the cause of a CI failure as a **hidden state**, maintains a probability distribution over possible causes, performs diagnostic actions to gather evidence, and updates its beliefs using Bayesian inference.
-
-The V1 decision policy selects diagnostic actions using **Expected Information Gain per unit diagnostic cost (EIG/cost)**.
-
-> **Status:** Research prototype / V1  
-> **Evaluation:** 40 held-out CI failure cases  
-> **Focus:** Bayesian diagnosis, sequential decision-making, information gain, and cost-aware action selection
+**Problem Statement:**
+> The agent observes raw CI failure logs and telemetry. It must select an active diagnostic probe (e.g., reading files, pinging endpoints, rerunning jobs) because the primary hidden root cause of the failure is not known.
 
 ---
 
-## Overview
+## 🏗️ Architecture & Core Loop
 
-CI failures can have multiple plausible causes, and the available evidence is often insufficient to determine the cause immediately.
+Unlike standard static classifiers, this agent treats CI failure diagnosis as a sequential decision-making problem under uncertainty. The agent explicitly separates evidence structuring from probabilistic reasoning.
 
-This project models diagnosis as a sequential decision problem:
-
-1. Start with an empirical prior over possible root causes.
-2. Observe available CI evidence, beginning with the failed pipeline stage.
-3. Evaluate possible diagnostic actions.
-4. Estimate the expected information gain of each action.
-5. Divide information gain by diagnostic cost.
-6. Execute the highest-ranked action.
-7. Use the action outcome as evidence and update the posterior using Bayes' rule.
-8. Repeat until a root cause reaches the reporting threshold.
-9. Escalate to human review if sufficient confidence cannot be achieved.
-
-The V1 architecture separates **evidence interpretation**, **probabilistic belief updating**, and **action selection** rather than allowing a single component to directly determine the diagnosis.
+1. **Passive Baseline ($E_0$):** An LLM structurer parses raw unstructured CI terminal text into a deterministic JSON evidence vector.
+2. **Belief Engine:** Maintains a probability distribution $P(s_i \mid E)$ over mutually exclusive primary root causes.
+3. **Diagnostic Policy:** Evaluates the Expected Information Gain (EIG) vs. compute cost for available active actions.
+4. **Active Probing:** Executes the highest-scoring diagnostic action to gather new evidence.
+5. **Belief Update:** Updates the posterior probability using Bayes' theorem.
+6. **Resolution:** Loops until a state-specific confidence threshold $p_i^*$ is reached, or escalates to human review.
 
 ---
 
-## Problem Formulation
+## 🔍 Hidden State Space
 
-The root cause is represented as a hidden variable:
+To maintain mathematical mutual exclusivity, failures are classified by their **Primary Root Cause requiring human intervention**.
 
-$$
-H \in \{\text{Code},\text{Test},\text{Dependency},\text{CI/Config},\text{Something else}\}
-$$
+| State | Description | Resolution Intervention |
+| :--- | :--- | :--- |
+| **$s_1$** | **Code / Logic Defect:** Assertion mismatch, strict static typing errors, linting violations. | Developer code fix |
+| **$s_2$** | **Pipeline Config:** Invalid YAML, deprecated actions, matrix incompatibilities. | Devops/Config fix |
+| **$s_3$** | **Dependency Drift:** Missing imports, resolver conflicts, unpinned versions. | Lockfile update |
+| **$s_4$** | **Resource Exhaustion:** OOM killer (137), memory leaks, runner timeouts. | Provisioning / Opt |
+| **$s_5$** | **Authentication:** Missing secrets, invalid tokens, unauthorized registries. | Secret injection |
+| **$s_6$** | **Flaky Test:** Time/concurrency non-determinism. | Retry mechanism |
+| **$s_7$** | **Network Outage:** Upstream proxy 503, unroutable external endpoints. | SRE Intervention |
 
-The agent maintains:
+---
 
-$$P(H \mid E)$$
+## 🛠️ Diagnostic Action Space ($\mathcal{A}$)
 
-where:
+The agent selects the optimal action $a^*$ by maximizing Expected Information Gain per unit of Execution Cost: 
+$$a^* = \arg\max_{a \in \mathcal{A}} \frac{EIG(a)}{Cost(a)}$$
 
-- $H$ = hidden root cause
-- $E$ = evidence currently available
-- $a$ = diagnostic action
-- $o$ = diagnostic action outcome
+| Action | Execution Target | Expected Cost ($C$) | Primary States Targeted |
+| :--- | :--- | :--- | :--- |
+| `read_file_snippet(path)` | Local Git tree | **1 (Low)** | $s_1$, $s_2$ |
+| `get_git_diff(sha)` | Git history | **1 (Low)** | $s_1$, $s_2$, $s_3$ |
+| `ping_endpoint(url)` | External network | **2 (Low)** | $s_7$ |
+| `check_runner_metrics()` | CI Telemetry API | **5 (Medium)** | $s_4$ |
+| `resolve_dependencies()` | Package Manager | **15 (High)** | $s_3$ |
+| `rerun_job(sha)` | CI Pipeline API | **100+ (Critical)** | $s_6$, $s_7$ |
 
-The V1 hidden states are:
+---
 
-| Hidden State | Description |
-|---|---|
-| **Code** | Recent code change or application issue |
-| **Test** | Test-related issue or flaky test |
-| **Dependency** | Dependency or dependency-related change |
-| **CI/Config** | CI, build, or environment configuration issue |
-| **Something else** | Residual, infrastructure, external-service, or out-of-distribution issues |
+## ⚖️ Decision Policy & Thresholds
+
+Instead of a rigid, global 90% confidence cutoff, this agent employs **Risk-Aware State-Specific Thresholds**. The threshold to declare a Flaky Test ($s_6$) is strictly higher than declaring a Network Outage ($s_7$) due to the severe compute waste (cost of false positive) associated with automated job reruns.
+
+$$p_i^* = \frac{CFP_i}{CFP_i + CFN_i}$$
+
+If actions are exhausted before reaching $p_i^*$, the agent triggers a **Human Escalation** function rather than forcing an uncertain prediction.
+
+---
+
+## 🧪 Evaluation Methodology
+
+The agent's policy is evaluated against a static Regex Rule-Engine baseline using 50 held-out cases:
+* **9 Synthetic Controlled Sandbox Cases:** Demonstrating isolated occurrences of $s_1$ through $s_7$.
+* **41 Production Benchmark Cases:** Clean, un-truncated failure tails mined from open-source repositories (e.g., `uvicorn`, `axolotl`).
+
+**Key Metrics Tracked:** Macro Precision/Recall, Average Diagnostic Cost (Compute), Human-Review Rate, and False-Positive Flaky Assumptions.
+
+---
+
+## 📁 Required Repository Structure
+
+```text
+week1/
+└── deliverables/
+    └── student-project/
+        ├── README.md
+        ├── research-file.md
+        ├── discussion-record.md
+        ├── review-record.md
+        ├── paper/
+        │   ├── main.tex
+        │   ├── references.bib
+        │   ├── figures/
+        │   └── preprint.pdf
+        ├── src/
+        ├── data/
+        ├── experiments/
+        ├── results/
+        ├── decisions/
+        │   └── probability-decision-record.md
+        └── social/
+            ├── linkedin-post.md
+            └── x-thread.md
 
 ---
 
